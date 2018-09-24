@@ -1631,6 +1631,9 @@ export class MathBackendWebGL implements KernelBackend {
       }
       return;
     }
+    if (texture != null) {
+      return;
+    }
     const shouldTimeProgram = this.activeTimers != null;
     let start: number;
     if (shouldTimeProgram) {
@@ -1646,8 +1649,6 @@ export class MathBackendWebGL implements KernelBackend {
           newTexture, texShape[0],
           // TODO(smilkov): Propagate the original typed array to gpgpu.
           texShape[1], typedArrayToFloat32(values, dtype));
-      // Once uploaded, don't store the values on cpu.
-      texData.values = null;
       if (shouldTimeProgram) {
         this.uploadWaitMs += performance.now() - start;
       }
