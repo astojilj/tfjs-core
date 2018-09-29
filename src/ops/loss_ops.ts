@@ -416,19 +416,17 @@ function softmaxCrossEntropyWithLogits_<T extends Tensor, O extends Tensor>(
     //   1. http://cs231n.github.io/linear-classify/#softmax
     //   2. https://blog.feedly.com/tricks-of-the-trade-logsumexp/
     const keepDims = true;
-    const lse = logits.logSumExp([dim], keepDims);
-
-    const logResult = logits.toFloat().sub(lse);
-    const costVector = logResult.mul(labels).neg();
-
-    const value = costVector.sum([dim]) as O;
+    const shiftedLogits = logits.sub(logits.max(dim, keepDims));
+    const expShiftedLogits = shiftedLogits.exp();
+    const sumExpShiftedLogits = expShiftedLogits.sum(dim, keepDims);
+    const costVector = shiftedLogits.sub(sumExpShiftedLogits.log()).mul(labels);
+    const value = costVector.sum(dim).neg() as O;
 
     const gradFunc = (dy: O) => {
       const dyShape = expandShapeToKeepDim(dy.shape, [dim]);
-      return [
-        dy.reshape(dyShape).mul(labels.toFloat().sub(logResult.exp())),
-        dy.reshape(dyShape).mul(logResult.exp().sub(labels.toFloat())),
-      ];
+      const grad = dy.reshape(dyShape).mul(
+          labels.toFloat().sub(expShiftedLogits.div(sumExpShiftedLogits)));
+      return [grad, grad.neg()];
     };
     return {value, gradFunc};
   });
