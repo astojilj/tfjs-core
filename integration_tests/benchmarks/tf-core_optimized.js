@@ -14659,8 +14659,9 @@
         MathBackendWebGL.prototype.shouldExecuteOnCPU = function (inputs, sizeThreshold) {
             var _this = this;
             if (sizeThreshold === void 0) { sizeThreshold = 10; }
-            return inputs.every(function (input) { return _this.texData.get(input.dataId).texture == null &&
+            var result = inputs.every(function (input) { return _this.texData.get(input.dataId).texture == null &&
                 sizeFromShape(input.shape) < sizeThreshold; });
+            return result;
         };
         MathBackendWebGL.prototype.getGPGPUContext = function () {
             return this.gpgpu;

@@ -133,13 +133,19 @@
       //////////////////////////////////
       // Place model prediction code here.
       //////////////////////////////////
-      return model.executeAsync(zeros);
+      return model.predict(zeros);
+    }
+    async function predictAsync(model) {
+      //////////////////////////////////
+      // Place model prediction code here.
+      //////////////////////////////////
+      return await model.executeAsync(zeros);
     }
   </script>
   <script>
     'use strict';
     const state = {
-      numRuns: 1,
+      numRuns: 20,
 
     };
     const modalDiv = document.getElementById('modal-msg');
@@ -198,9 +204,11 @@
     async function warmUpAndRecordTime() {
       await showMsg('Warming up');
       const start = performance.now();
-      let res = predict(model);
-      if (res instanceof Promise) {
-        res = await res;
+      let res;
+      if(res instanceof Promise) {
+        res = predict(model);
+      } else {
+        res = await predictAsync(model);
       }
       if (res instanceof tf.Tensor) {
         await res.data();
@@ -228,10 +236,11 @@
       const start = performance.now();
       let res;
       for (let i = 0; i < state.numRuns; i++) {
-        res = predict(model);
-      }
-      if (res instanceof Promise) {
-        res = await res;
+        if(res instanceof Promise) {
+          res = await predictAsync(model);
+        } else {
+          res = predict(model);
+        }
       }
       if (res instanceof tf.Tensor) {
         res.dataSync();
@@ -277,7 +286,7 @@
           });
         }
       }
-      let res = predict(model);
+      let res = await predict(model);
       if (res instanceof Promise) {
         res = await res;
       }
@@ -308,18 +317,18 @@
       await showEnvironment();
       await loadAndRecordTime();
       await warmUpAndRecordTime();
-      // await showMsg('Waiting for GC');
+      await showMsg('Waiting for GC');
       // await sleep(1000);
       // await profileMemory();
-      // await sleep(200);
-      // await measureAveragePredictTime();
-      // await sleep(200);
-      // if (queryTimerIsEnabled()) {
-      //   await profileKernelTime();
-      // } else {
-      //   showMsg('Skipping kernel times since query timer extension is not ' +
-      //           'available. <br/> Use Chrome 70+.');
-      // };
+      await sleep(200);
+      await measureAveragePredictTime();
+      await sleep(200);
+      if (queryTimerIsEnabled()) {
+        await profileKernelTime();
+      } else {
+        showMsg('Skipping kernel times since query timer extension is not ' +
+                'available. <br/> Use Chrome 70+.');
+      };
     }
     onPageLoad();
   </script>
