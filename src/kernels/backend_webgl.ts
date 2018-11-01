@@ -645,7 +645,7 @@ export class MathBackendWebGL implements KernelBackend {
 
   multiply(a: Tensor, b: Tensor): Tensor {
     if(this.shouldExecuteOnCPU([a, b])) {
-      return this.multiply(a, b);
+      return this.cpuBackend.multiply(a, b);
     }
     if (a.dtype === 'complex64') {
       const aData = this.texData.get(a.dataId);
