@@ -112,7 +112,8 @@
       <tbody></tbody>
     </table>
   </div>
-  <script src="https://unpkg.com/@tensorflow/tfjs-core/dist/tf-core.js"></script>
+  <!-- <script src="https://unpkg.com/@tensorflow/tfjs-core/dist/tf-core.js"></script> -->
+  <script src="tf-core.js"></script>
   <script src="https://unpkg.com/@tensorflow/tfjs-layers/dist/tf-layers.js"></script>
   <script src="https://unpkg.com/@tensorflow/tfjs-converter/dist/tf-converter.js"></script>
   <script>
@@ -122,8 +123,8 @@
       // Place model loading code here.
       //////////////////////////////////
       return await tf.loadFrozenModel(
-        'https://storage.googleapis.com/tfjs-models/savedmodel/mobilenet_v2_1.0_224/tensorflowjs_model.pb',
-        'https://storage.googleapis.com/tfjs-models/savedmodel/mobilenet_v2_1.0_224/weights_manifest.json');
+        'https://storage.googleapis.com/tfjs-models/savedmodel/coco-ssd-mobilenet_v1/tensorflowjs_model.pb',
+        'https://storage.googleapis.com/tfjs-models/savedmodel/coco-ssd-mobilenet_v1/weights_manifest.json');
     }
 
     const zeros = tf.zeros([1, 224, 224, 3]);
@@ -131,13 +132,13 @@
       //////////////////////////////////
       // Place model prediction code here.
       //////////////////////////////////
-      return model.predict(zeros);
+      return model.executeAsync(zeros);
     }
   </script>
   <script>
     'use strict';
     const state = {
-      numRuns: 20,
+      numRuns: 1,
 
     };
     const modalDiv = document.getElementById('modal-msg');
@@ -311,13 +312,13 @@
       await profileMemory();
       await sleep(200);
       await measureAveragePredictTime();
-      await sleep(200);
-      if (queryTimerIsEnabled()) {
-        await profileKernelTime();
-      } else {
-        showMsg('Skipping kernel times since query timer extension is not ' +
-                'available. <br/> Use Chrome 70+.');
-      };
+      // await sleep(200);
+      // if (queryTimerIsEnabled()) {
+      //   await profileKernelTime();
+      // } else {
+      //   showMsg('Skipping kernel times since query timer extension is not ' +
+      //           'available. <br/> Use Chrome 70+.');
+      // };
     }
     onPageLoad();
   </script>
