@@ -9970,6 +9970,7 @@
             return this.compileAndRun(program, [input]);
         };
         MathBackendWebGL.prototype.compileAndRun = function (program, inputs, output, customSetup, pageToCpu) {
+            console.log("COMPILE AND RUN", program.constructor.name);
             var _this = this;
             if (pageToCpu === void 0) { pageToCpu = true; }
             if (output == null) {
@@ -9988,6 +9989,8 @@
                         "parts.");
                 }
                 var texData = _this.texData.get(input.dataId);
+                console.log("input is on the GPU?", texData.texture !== null);
+                console.log("input size", input.shape);
                 if (texData.texture == null &&
                     !(!texData.isPacked && program.usesPackedTextures) &&
                     sizeFromShape(input.shape) <=
@@ -10016,6 +10019,7 @@
                 _this.uploadToGPU(input.dataId);
                 return { shape: input.shape, texData: texData, isUniform: false };
             });
+            console.log("output size", output.shape);
             this.uploadToGPU(output.dataId);
             var outputData = {
                 shape: output.shape,

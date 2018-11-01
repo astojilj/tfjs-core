@@ -35,7 +35,9 @@ import {DataId, Scalar, setTensorTracker, Tensor, Tensor1D, Tensor2D, Tensor3D, 
 import {DataType, DataTypeMap, Rank, RecursiveArray, ShapeMap, sumOutType, TypedArray, upcastType} from '../types';
 import * as util from '../util';
 import {getTypedArrayFromDType, sizeFromShape} from '../util';
+
 import {DataMover, DataStorage, KernelBackend} from './backend';
+import {MathBackendCPU} from './backend_cpu';
 import * as backend_util from './backend_util';
 import {mergeRealAndImagArrays} from './complex_util';
 import {nonMaxSuppressionImpl} from './non_max_suppression_impl';
@@ -160,6 +162,7 @@ export class MathBackendWebGL implements KernelBackend {
   private uploadWaitMs = 0;
   // Accumulated time spent (including blocking in downloading data from webgl.
   private downloadWaitMs = 0;
+  private cpuBackend: KernelBackend;
 
   register(dataId: DataId, shape: number[], dtype: DataType): void {
     if (this.texData.has(dataId)) {
@@ -502,6 +505,14 @@ export class MathBackendWebGL implements KernelBackend {
           BEFORE_PAGING_CONSTANT;
     }
     this.textureManager = new TextureManager(this.gpgpu);
+    this.cpuBackend = new MathBackendCPU();
+  }
+
+  private shouldExecuteOnCPU(inputs: Tensor[], sizeThreshold: number = 10):
+      boolean {
+    return inputs.every(
+        input => this.texData.get(input.dataId).texture == null &&
+            util.sizeFromShape(input.shape) < sizeThreshold);
   }
 
   getGPGPUContext(): GPGPUContext {
@@ -543,6 +554,12 @@ export class MathBackendWebGL implements KernelBackend {
       x: T, begin: number[], end: number[], strides: number[],
       beginMask: number, endMask: number, ellipsisMask: number,
       newAxisMask: number, shrinkAxisMask: number): T {
+    if (this.shouldExecuteOnCPU([x])) {
+      return this.cpuBackend.stridedSlice(
+          x, begin, end, strides, beginMask, endMask, ellipsisMask, newAxisMask,
+          shrinkAxisMask);
+    }
+
     const [beginIndex, size, shrinkAxis] = getStridedSlicedInfo(
         x.shape, begin, end, strides, beginMask, endMask, ellipsisMask,
         newAxisMask, shrinkAxisMask);
@@ -1686,6 +1703,7 @@ export class MathBackendWebGL implements KernelBackend {
       }
 
       let texData = this.texData.get(input.dataId);
+      console.log('input on cpu?', texData.texture == null);
       // Upload small tensors that live on the CPU as uniforms, not as
       // textures. Do this only when the environment supports 32bit floats due
       // to problems when comparing 16bit floats with 32bit floats.
