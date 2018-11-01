@@ -545,6 +545,10 @@ export class MathBackendWebGL implements KernelBackend {
   }
 
   slice<T extends Tensor>(x: T, begin: number[], size: number[]): T {
+    if (this.shouldExecuteOnCPU([x])) {
+      return this.cpuBackend.slice(x, begin, size);
+    }
+
     const program = new SliceProgram(size);
     const customSetup = program.getCustomSetupFunc(begin);
     return this.compileAndRun(program, [x], null, customSetup);
@@ -596,6 +600,9 @@ export class MathBackendWebGL implements KernelBackend {
   }
 
   concat(tensors: Tensor[], axis: number): Tensor {
+    if(this.shouldExecuteOnCPU(tensors)) {
+      return this.cpuBackend.concat(tensors, axis);
+    }
     if (tensors.length === 1) {
       return tensors[0];
     }
@@ -637,6 +644,9 @@ export class MathBackendWebGL implements KernelBackend {
   }
 
   multiply(a: Tensor, b: Tensor): Tensor {
+    if(this.shouldExecuteOnCPU([a, b])) {
+      return this.multiply(a, b);
+    }
     if (a.dtype === 'complex64') {
       const aData = this.texData.get(a.dataId);
       const bData = this.texData.get(b.dataId);
@@ -943,6 +953,9 @@ export class MathBackendWebGL implements KernelBackend {
   }
 
   less(a: Tensor, b: Tensor): Tensor {
+    if(this.shouldExecuteOnCPU([a, b])) {
+      return this.cpuBackend.less(a, b);
+    }
     const program = new BinaryOpProgram(binaryop_gpu.LESS, a.shape, b.shape);
     const output = this.makeOutputArray(program.outputShape, 'bool');
     return this.compileAndRun(program, [a, b], output);
@@ -956,6 +969,9 @@ export class MathBackendWebGL implements KernelBackend {
   }
 
   greater(a: Tensor, b: Tensor): Tensor {
+    if(this.shouldExecuteOnCPU([a, b])) {
+      return this.cpuBackend.greater(a, b);
+    }
     const program = new BinaryOpProgram(binaryop_gpu.GREATER, a.shape, b.shape);
     const output = this.makeOutputArray(program.outputShape, 'bool');
     return this.compileAndRun(program, [a, b], output);
@@ -1017,6 +1033,9 @@ export class MathBackendWebGL implements KernelBackend {
   }
 
   minimum(a: Tensor, b: Tensor): Tensor {
+    if(this.shouldExecuteOnCPU([a, b])) {
+      return this.cpuBackend.minimum(a, b);
+    }
     const program = new BinaryOpProgram(binaryop_gpu.MIN, a.shape, b.shape);
     return this.compileAndRun(program, [a, b]);
   }
@@ -1037,6 +1056,9 @@ export class MathBackendWebGL implements KernelBackend {
   }
 
   maximum(a: Tensor, b: Tensor): Tensor {
+    if(this.shouldExecuteOnCPU([a, b])) {
+      return this.cpuBackend.maximum(a, b);
+    }
     const program = new BinaryOpProgram(binaryop_gpu.MAX, a.shape, b.shape);
     return this.compileAndRun(program, [a, b]);
   }
@@ -1145,6 +1167,9 @@ export class MathBackendWebGL implements KernelBackend {
   }
 
   subtract(a: Tensor, b: Tensor): Tensor {
+    if(this.shouldExecuteOnCPU([a, b])) {
+      return this.cpuBackend.subtract(a, b);
+    }
     if (a.dtype === 'complex64' && b.dtype === 'complex64') {
       return this.complexSeparableBinaryOp(a, b, binaryop_gpu.SUB);
     }

@@ -4300,6 +4300,7 @@
         function BinaryOpProgram(op, aShape, bShape) {
             this.variableNames = ['A', 'B'];
             this.supportsBroadcasting = true;
+            this.op = op;
             this.outputShape =
                 assertAndGetBroadcastShape(aShape, bShape);
             this.userCode = "\n      uniform float NAN;\n      float binaryOperation(float a, float b) {\n        " + op + "\n      }\n\n      void main() {\n        float a = getAAtOutCoords();\n        float b = getBAtOutCoords();\n        setOutput(binaryOperation(a, b));\n      }\n    ";
@@ -7215,6 +7216,7 @@
         function UnaryOpProgram(aShape, opSnippet) {
             this.variableNames = ['A'];
             this.outputShape = aShape;
+            this.opSnippet = opSnippet;
             this.userCode = "\n      uniform float NAN;\n      float unaryOperation(float x) {\n        " + opSnippet + "\n      }\n\n      void main() {\n        float x = getAAtOutCoords();\n        float y = unaryOperation(x);\n\n        setOutput(y);\n      }\n    ";
         }
         UnaryOpProgram.prototype.getCustomSetupFunc = function () {
@@ -9970,8 +9972,13 @@
             return this.compileAndRun(program, [input]);
         };
         MathBackendWebGL.prototype.compileAndRun = function (program, inputs, output, customSetup, pageToCpu) {
-            console.log("COMPILE AND RUN", program.constructor.name);
             var _this = this;
+            if(inputs.every(function(d) {
+                return sizeFromShape(d.shape) < 100
+            })) {
+                console.log("COMPILE AND RUN", program.constructor.name, program.op, program.opSnippet);
+                console.log(inputs.map(d => sizeFromShape(d.shape)))
+            }
             if (pageToCpu === void 0) { pageToCpu = true; }
             if (output == null) {
                 output =
@@ -9989,8 +9996,6 @@
                         "parts.");
                 }
                 var texData = _this.texData.get(input.dataId);
-                console.log("input is on the GPU?", texData.texture !== null);
-                console.log("input size", input.shape);
                 if (texData.texture == null &&
                     !(!texData.isPacked && program.usesPackedTextures) &&
                     sizeFromShape(input.shape) <=
@@ -10019,7 +10024,6 @@
                 _this.uploadToGPU(input.dataId);
                 return { shape: input.shape, texData: texData, isUniform: false };
             });
-            console.log("output size", output.shape);
             this.uploadToGPU(output.dataId);
             var outputData = {
                 shape: output.shape,
