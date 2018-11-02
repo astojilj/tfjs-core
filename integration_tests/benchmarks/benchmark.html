@@ -113,8 +113,7 @@
     </table>
   </div>
   <!-- <script src="https://unpkg.com/@tensorflow/tfjs-core/dist/tf-core.js"></script> -->
-  <!-- <script src="tf-core.js"></script> -->
-  <script src="tf-core_optimized.js"></script>
+  <script src="tf-core.js"></script>
   <script src="https://unpkg.com/@tensorflow/tfjs-layers/dist/tf-layers.js"></script>
   <script src="https://unpkg.com/@tensorflow/tfjs-converter/dist/tf-converter.js"></script>
   <script>
@@ -127,6 +126,8 @@
         'https://storage.googleapis.com/tfjs-models/savedmodel/coco-ssd-mobilenet_v1/tensorflowjs_model.pb',
         'https://storage.googleapis.com/tfjs-models/savedmodel/coco-ssd-mobilenet_v1/weights_manifest.json');
     }
+
+    // tf.ENV.set('WEBGL_CPU_FORWARD', false);
 
     const zeros = tf.zeros([1, 224, 224, 3]);
     function predict(model) {

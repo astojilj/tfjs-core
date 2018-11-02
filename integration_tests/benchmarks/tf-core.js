@@ -2120,6 +2120,7 @@
     var URL_PROPERTIES = [
         { name: 'DEBUG', type: Type.BOOLEAN },
         { name: 'IS_BROWSER', type: Type.BOOLEAN },
+        { name: 'WEBGL_CPU_FORWARD', type: Type.BOOLEAN },
         { name: 'WEBGL_PACK_BATCHNORMALIZATION', type: Type.BOOLEAN },
         { name: 'WEBGL_CONV_IM2COL', type: Type.BOOLEAN },
         { name: 'WEBGL_MAX_TEXTURE_SIZE', type: Type.NUMBER },
@@ -2388,6 +2389,9 @@
             }
             else if (feature === 'IS_CHROME') {
                 return isChrome();
+            }
+            else if (feature === 'WEBGL_CPU_FORWARD') {
+                return true;
             }
             else if (feature === 'WEBGL_PACK_BATCHNORMALIZATION') {
                 return false;
@@ -4300,7 +4304,6 @@
         function BinaryOpProgram(op, aShape, bShape) {
             this.variableNames = ['A', 'B'];
             this.supportsBroadcasting = true;
-            this.op = op;
             this.outputShape =
                 assertAndGetBroadcastShape(aShape, bShape);
             this.userCode = "\n      uniform float NAN;\n      float binaryOperation(float a, float b) {\n        " + op + "\n      }\n\n      void main() {\n        float a = getAAtOutCoords();\n        float b = getBAtOutCoords();\n        setOutput(binaryOperation(a, b));\n      }\n    ";
@@ -7216,7 +7219,6 @@
         function UnaryOpProgram(aShape, opSnippet) {
             this.variableNames = ['A'];
             this.outputShape = aShape;
-            this.opSnippet = opSnippet;
             this.userCode = "\n      uniform float NAN;\n      float unaryOperation(float x) {\n        " + opSnippet + "\n      }\n\n      void main() {\n        float x = getAAtOutCoords();\n        float y = unaryOperation(x);\n\n        setOutput(y);\n      }\n    ";
         }
         UnaryOpProgram.prototype.getCustomSetupFunc = function () {
@@ -8847,6 +8849,7 @@
         return out.toTensor();
     }
 
+    var CPU_HANDOFF_SIZE_THRESHOLD = 10;
     var BEFORE_PAGING_CONSTANT = 300;
     var MathBackendWebGL = (function () {
         function MathBackendWebGL(gpgpu, delayedStorage) {
@@ -9162,6 +9165,22 @@
             this.uploadToGPU(dataId);
             return this.texData.get(dataId).texture;
         };
+        MathBackendWebGL.prototype.getCPUBackend = function () {
+            if (!ENV.get('WEBGL_CPU_FORWARD')) {
+                return null;
+            }
+            if (this.cpuBackend == null) {
+                this.cpuBackend = ENV.findBackend('cpu');
+            }
+            return this.cpuBackend;
+        };
+        MathBackendWebGL.prototype.shouldExecuteOnCPU = function (inputs, sizeThreshold) {
+            var _this = this;
+            if (sizeThreshold === void 0) { sizeThreshold = CPU_HANDOFF_SIZE_THRESHOLD; }
+            return this.getCPUBackend() != null &&
+                inputs.every(function (input) { return _this.texData.get(input.dataId).texture == null &&
+                    input.size < sizeThreshold; });
+        };
         MathBackendWebGL.prototype.getGPGPUContext = function () {
             return this.gpgpu;
         };
@@ -9186,11 +9205,17 @@
             return resultData.complexTensors.imag.clone();
         };
         MathBackendWebGL.prototype.slice = function (x, begin, size) {
+            if (this.shouldExecuteOnCPU([x])) {
+                return this.cpuBackend.slice(x, begin, size);
+            }
             var program = new SliceProgram(size);
             var customSetup = program.getCustomSetupFunc(begin);
             return this.compileAndRun(program, [x], null, customSetup);
         };
         MathBackendWebGL.prototype.stridedSlice = function (x, begin, end, strides, beginMask, endMask, ellipsisMask, newAxisMask, shrinkAxisMask) {
+            if (this.shouldExecuteOnCPU([x])) {
+                return this.cpuBackend.stridedSlice(x, begin, end, strides, beginMask, endMask, ellipsisMask, newAxisMask, shrinkAxisMask);
+            }
             var _a = getStridedSlicedInfo(x.shape, begin, end, strides, beginMask, endMask, ellipsisMask, newAxisMask, shrinkAxisMask), beginIndex = _a[0], size = _a[1], shrinkAxis = _a[2];
             var shape = size.filter(function (v, index) { return shrinkAxis.indexOf(index) === -1; });
             if (shape.some(function (axis) { return axis === 0; })) {
@@ -9212,6 +9237,9 @@
             return res.reshape(outShape);
         };
         MathBackendWebGL.prototype.concat = function (tensors, axis) {
+            if (this.shouldExecuteOnCPU(tensors)) {
+                return this.cpuBackend.concat(tensors, axis);
+            }
             if (tensors.length === 1) {
                 return tensors[0];
             }
@@ -9257,6 +9285,9 @@
                 real.dispose();
                 imag.dispose();
                 return complex;
+            }
+            if (this.shouldExecuteOnCPU([a, b])) {
+                return this.cpuBackend.multiply(a, b);
             }
             var program = new BinaryOpProgram(MUL, a.shape, b.shape);
             var output = this.makeOutputArray(program.outputShape, a.dtype);
@@ -9457,6 +9488,9 @@
             return this.compileAndRun(program, [a, b], output);
         };
         MathBackendWebGL.prototype.less = function (a, b) {
+            if (this.shouldExecuteOnCPU([a, b])) {
+                return this.cpuBackend.less(a, b);
+            }
             var program = new BinaryOpProgram(LESS, a.shape, b.shape);
             var output = this.makeOutputArray(program.outputShape, 'bool');
             return this.compileAndRun(program, [a, b], output);
@@ -9467,6 +9501,9 @@
             return this.compileAndRun(program, [a, b], output);
         };
         MathBackendWebGL.prototype.greater = function (a, b) {
+            if (this.shouldExecuteOnCPU([a, b])) {
+                return this.cpuBackend.greater(a, b);
+            }
             var program = new BinaryOpProgram(GREATER, a.shape, b.shape);
             var output = this.makeOutputArray(program.outputShape, 'bool');
             return this.compileAndRun(program, [a, b], output);
@@ -9513,6 +9550,9 @@
             return this.reduce(a2D, 'min', a2D.dtype).reshape(outShape);
         };
         MathBackendWebGL.prototype.minimum = function (a, b) {
+            if (this.shouldExecuteOnCPU([a, b])) {
+                return this.cpuBackend.minimum(a, b);
+            }
             var program = new BinaryOpProgram(MIN, a.shape, b.shape);
             return this.compileAndRun(program, [a, b]);
         };
@@ -9529,6 +9569,9 @@
             return this.reduce(a2D, 'max', a2D.dtype).reshape(outShape);
         };
         MathBackendWebGL.prototype.maximum = function (a, b) {
+            if (this.shouldExecuteOnCPU([a, b])) {
+                return this.cpuBackend.maximum(a, b);
+            }
             var program = new BinaryOpProgram(MAX, a.shape, b.shape);
             return this.compileAndRun(program, [a, b]);
         };
@@ -9609,6 +9652,9 @@
         MathBackendWebGL.prototype.subtract = function (a, b) {
             if (a.dtype === 'complex64' && b.dtype === 'complex64') {
                 return this.complexSeparableBinaryOp(a, b, SUB);
+            }
+            if (this.shouldExecuteOnCPU([a, b])) {
+                return this.cpuBackend.subtract(a, b);
             }
             var program = new BinaryOpProgram(SUB, a.shape, b.shape);
             var output = this.makeOutputArray(program.outputShape, upcastType(a.dtype, b.dtype));
@@ -9973,12 +10019,6 @@
         };
         MathBackendWebGL.prototype.compileAndRun = function (program, inputs, output, customSetup, pageToCpu) {
             var _this = this;
-            if(inputs.every(function(d) {
-                return sizeFromShape(d.shape) < 100
-            })) {
-                console.log("COMPILE AND RUN", program.constructor.name, program.op, program.opSnippet);
-                console.log(inputs.map(d => sizeFromShape(d.shape)))
-            }
             if (pageToCpu === void 0) { pageToCpu = true; }
             if (output == null) {
                 output =
@@ -11228,7 +11268,7 @@
     var reverse3d = op({ reverse3d_: reverse3d_ });
     var reverse4d = op({ reverse4d_: reverse4d_ });
 
-    function maxPoolImpl_(x, filterSize, strides, dilations, pad, dimRoundingMode) {
+    function maxPoolImpl_(x, filterSize, strides, dilations, pad$$1, dimRoundingMode) {
         var $x = convertToTensor(x, 'x', 'maxPool');
         var x4D = $x;
         var reshapedTo4D = false;
@@ -11243,14 +11283,14 @@
         assert(eitherStridesOrDilationsAreOne(strides, dilations), 'Error in maxPool: Either strides or dilations must be 1. ' +
             ("Got strides " + strides + " and dilations '" + dilations + "'"));
         if (dimRoundingMode != null) {
-            assert(isInt(pad), "Error in maxPool: pad must be an integer when using, " +
-                ("dimRoundingMode " + dimRoundingMode + " but got pad " + pad + "."));
+            assert(isInt(pad$$1), "Error in maxPool: pad must be an integer when using, " +
+                ("dimRoundingMode " + dimRoundingMode + " but got pad " + pad$$1 + "."));
         }
-        var convInfo = computePool2DInfo(x4D.shape, filterSize, strides, dilations, pad, dimRoundingMode);
+        var convInfo = computePool2DInfo(x4D.shape, filterSize, strides, dilations, pad$$1, dimRoundingMode);
         var grad = function (dy, saved) {
             var y4D = saved[0];
             return {
-                x: function () { return maxPoolBackprop(dy, x4D, y4D, filterSize, strides, dilations, pad); }
+                x: function () { return maxPoolBackprop(dy, x4D, y4D, filterSize, strides, dilations, pad$$1); }
             };
         };
         var res = ENV.engine.runKernel(function (backend, save) { return save(backend.maxPool(x4D, convInfo)); }, { x: x4D }, grad);
@@ -11259,10 +11299,10 @@
         }
         return res;
     }
-    function maxPool_(x, filterSize, strides, pad, dimRoundingMode) {
-        return maxPoolImpl_(x, filterSize, strides, 1, pad, dimRoundingMode);
+    function maxPool_(x, filterSize, strides, pad$$1, dimRoundingMode) {
+        return maxPoolImpl_(x, filterSize, strides, 1, pad$$1, dimRoundingMode);
     }
-    function avgPoolImpl_(x, filterSize, strides, dilations, pad, dimRoundingMode) {
+    function avgPoolImpl_(x, filterSize, strides, dilations, pad$$1, dimRoundingMode) {
         var $x = convertToTensor(x, 'x', 'avgPool');
         assert($x.dtype === 'float32', 'The input dtype to avgPool must be float32');
         if (dilations == null) {
@@ -11278,13 +11318,13 @@
         }
         assert(x4D.rank === 4, "Error in avgPool: x must be rank 4 but got rank " + x4D.rank + ".");
         if (dimRoundingMode != null) {
-            assert(isInt(pad), "Error in avgPool: pad must be an integer when using, " +
-                ("dimRoundingMode " + dimRoundingMode + " but got pad " + pad + "."));
+            assert(isInt(pad$$1), "Error in avgPool: pad must be an integer when using, " +
+                ("dimRoundingMode " + dimRoundingMode + " but got pad " + pad$$1 + "."));
         }
-        var convInfo = computePool2DInfo(x4D.shape, filterSize, strides, dilations, pad);
+        var convInfo = computePool2DInfo(x4D.shape, filterSize, strides, dilations, pad$$1);
         var grad = function (dy) {
             return {
-                x: function () { return avgPoolBackprop(dy, x4D, filterSize, strides, dilations, pad); }
+                x: function () { return avgPoolBackprop(dy, x4D, filterSize, strides, dilations, pad$$1); }
             };
         };
         var res = ENV.engine.runKernel(function (backend) { return backend.avgPool(x4D, convInfo); }, { x: x4D }, grad);
@@ -11294,24 +11334,52 @@
         }
         return res;
     }
-    function avgPool_(x, filterSize, strides, pad, dimRoundingMode) {
-        return avgPoolImpl_(x, filterSize, strides, 1, pad, dimRoundingMode);
+    function avgPool_(x, filterSize, strides, pad$$1, dimRoundingMode) {
+        return avgPoolImpl_(x, filterSize, strides, 1, pad$$1, dimRoundingMode);
     }
-    function pool_(input, windowShape, poolingType, padding, dilationRate, strides) {
-        if (dilationRate == null) {
-            dilationRate = 1;
+    function pool_(input, windowShape, poolingType, pad$$1, dilations, strides) {
+        if (dilations == null) {
+            dilations = [1, 1];
         }
         if (strides == null) {
             strides = 1;
         }
-        if (poolingType === 'avg') {
-            return avgPoolImpl_(input, windowShape, strides, dilationRate, padding);
+        if (pad$$1 === 0) {
+            pad$$1 = 'valid';
+        }
+        var $x = convertToTensor(input, 'x', 'maxPool');
+        var x4D = $x;
+        var reshapedTo4D = false;
+        if ($x.rank === 3) {
+            reshapedTo4D = true;
+            x4D = $x.as4D(1, $x.shape[0], $x.shape[1], $x.shape[2]);
+        }
+        assert(eitherStridesOrDilationsAreOne(strides, dilations), 'Error in pool: Either strides or dilations must be 1. ' +
+            ("Got strides " + strides + " and dilations '" + dilations + "'"));
+        var convInfo = computePool2DInfo(x4D.shape, windowShape, strides, dilations, pad$$1);
+        var dilation = [convInfo.dilationHeight, convInfo.dilationWidth];
+        var basePadding;
+        if (pad$$1 === 'same') {
+            basePadding = withSpaceToBatchBasePaddings([convInfo.filterHeight, convInfo.filterWidth], dilation);
         }
         else {
-            return maxPoolImpl_(input, windowShape, strides, dilationRate, padding);
+            basePadding = [[0, 0], [0, 0]];
         }
+        var isDilationOne = dilation[0] === 1 && dilation[1] === 1;
+        var _a = requiredSpaceToBatchPaddings([convInfo.inHeight, convInfo.inWidth], dilation, basePadding), adjustedPadding = _a[0], adjustedCrops = _a[1];
+        var convertedPad = isDilationOne ? pad$$1 : 'valid';
+        var convertedX = isDilationOne ? x4D : spaceToBatchND(x4D, dilation, adjustedPadding);
+        var forwardOp = poolingType === 'avg' ?
+            function () { return avgPoolImpl_(convertedX, windowShape, strides, 1, convertedPad); } :
+            function () { return maxPoolImpl_(convertedX, windowShape, strides, 1, convertedPad); };
+        var y = forwardOp();
+        var res = isDilationOne ? y : batchToSpaceND(y, dilation, adjustedCrops);
+        if (reshapedTo4D) {
+            return res.as3D(res.shape[1], res.shape[2], res.shape[3]);
+        }
+        return res;
     }
-    function maxPoolBackprop(dy, input, output, filterSize, strides, dilations, pad, dimRoundingMode) {
+    function maxPoolBackprop(dy, input, output, filterSize, strides, dilations, pad$$1, dimRoundingMode) {
         var $dy = convertToTensor(dy, 'dy', 'maxPoolBackprop');
         var $input = convertToTensor(input, 'input', 'maxPoolBackprop');
         var $output = convertToTensor(output, 'output', 'maxPoolBackprop');
@@ -11326,14 +11394,14 @@
         assert($input.rank === 4, "Error in maxPoolBackprop: input must be rank 4 but got rank " +
             ($input.rank + "."));
         if (dimRoundingMode != null) {
-            assert(isInt(pad), "Error in maxPoolBackprop: pad must be an integer when using, " +
-                ("dimRoundingMode " + dimRoundingMode + " but got pad " + pad + "."));
+            assert(isInt(pad$$1), "Error in maxPoolBackprop: pad must be an integer when using, " +
+                ("dimRoundingMode " + dimRoundingMode + " but got pad " + pad$$1 + "."));
         }
-        var convInfo = computePool2DInfo($input.shape, filterSize, strides, dilations, pad, dimRoundingMode);
+        var convInfo = computePool2DInfo($input.shape, filterSize, strides, dilations, pad$$1, dimRoundingMode);
         var res = ENV.engine.runKernel(function (backend) { return backend.maxPoolBackprop($dy, $input, $output, convInfo); }, { $dy: $dy, $input: $input });
         return res;
     }
-    function avgPoolBackprop(dy, input, filterSize, strides, dilations, pad) {
+    function avgPoolBackprop(dy, input, filterSize, strides, dilations, pad$$1) {
         var $dy = convertToTensor(dy, 'dy', 'avgPoolBackprop');
         var $input = convertToTensor(input, 'input', 'avgPoolBackprop');
         assert($input.rank === $dy.rank, "Rank of input (" + $input.rank + ") does not match rank of dy (" + $dy.rank + ")");
@@ -11354,12 +11422,33 @@
             (dy4D.rank + "."));
         assert(input4D.rank === 4, "Error in avgPoolBackprop: input must be rank 4 but got rank " +
             (input4D.rank + "."));
-        var convInfo = computePool2DInfo(input4D.shape, filterSize, strides, dilations, pad);
+        var convInfo = computePool2DInfo(input4D.shape, filterSize, strides, dilations, pad$$1);
         var res = ENV.engine.runKernel(function (backend) { return backend.avgPoolBackprop(dy4D, input4D, convInfo); }, { dy4D: dy4D, input4D: input4D });
         if (reshapedTo4D) {
             return res.as3D(res.shape[1], res.shape[2], res.shape[3]);
         }
         return res;
+    }
+    function requiredSpaceToBatchPaddings(inputShape, blockShape, basePadding) {
+        var padStart = basePadding.map(function (b) { return b[0]; });
+        var origPadEnd = basePadding.map(function (b) { return b[1]; });
+        var fullInputShape = inputShape.concat(padStart, origPadEnd);
+        var padEndExtra = blockShape.map(function (b, i) { return (b - fullInputShape[i] % b) % b; });
+        var padEnd = origPadEnd.map(function (s, i) { return s + padEndExtra[i]; });
+        var paddings = blockShape.map(function (_, i) { return [padStart[i], padEnd[i]]; });
+        var crops = blockShape.map(function (_, i) { return [0, padEndExtra[i]]; });
+        return [paddings, crops];
+    }
+    function withSpaceToBatchBasePaddings(filterShape, dilation) {
+        var dilatedFilterShape = filterShape.map(function (s, i) {
+            return s + (s - 1) * (dilation[i] - 1);
+        });
+        var padExtraShape = dilatedFilterShape.map(function (s) { return s - 1; });
+        var padExtraStart = padExtraShape.map(function (s) { return Math.floor(s / 2); });
+        var padExtraEnd = padExtraShape.map(function (s, i) { return s - padExtraStart[i]; });
+        return padExtraShape.map(function (_, i) {
+            return [padExtraStart[i], padExtraEnd[i]];
+        });
     }
     var maxPool = op({ maxPool_: maxPool_ });
     var avgPool = op({ avgPool_: avgPool_ });
@@ -12581,12 +12670,31 @@
         var ret = ENV.engine.runKernel(function (backend) { return backend.ifft(input2D); }, { input: input });
         return ret.reshape(input.shape);
     }
+    function rfft_(input) {
+        assert(input.dtype === 'float32', "The dtype for rfft() must be real value but\n    got " + input.dtype);
+        var innerDimensionSize = input.shape[input.shape.length - 1];
+        var batch = input.size / innerDimensionSize;
+        var zeros = input.zerosLike();
+        var complexInput = complex(input, zeros).as2D(batch, innerDimensionSize);
+        var ret = ENV.engine.runKernel(function (backend) { return backend.fft(complexInput); }, { complexInput: complexInput });
+        var half = Math.floor(innerDimensionSize / 2) + 1;
+        var realValues = real(ret);
+        var imagValues = imag(ret);
+        var realComplexConjugate = realValues.split([half, innerDimensionSize - half], realValues.shape.length - 1);
+        var imagComplexConjugate = imagValues.split([half, innerDimensionSize - half], imagValues.shape.length - 1);
+        var outputShape = input.shape.slice();
+        outputShape[input.shape.length - 1] = half;
+        return complex(realComplexConjugate[0], imagComplexConjugate[0])
+            .reshape(outputShape);
+    }
     var fft = op({ fft_: fft_ });
     var ifft = op({ ifft_: ifft_ });
+    var rfft = op({ rfft_: rfft_ });
 
     var spectral_ops = /*#__PURE__*/Object.freeze({
         fft: fft,
-        ifft: ifft
+        ifft: ifft,
+        rfft: rfft
     });
 
     function validateInput$1(sparseIndices, sparseValues, outputShape, defaultValues) {
@@ -13344,6 +13452,7 @@
         scatterND: scatterND,
         fft: fft,
         ifft: ifft,
+        rfft: rfft,
         sparseToDense: sparseToDense,
         gatherND: gatherND
     });
@@ -16831,7 +16940,8 @@
     }
 
     var BrowserHTTPRequest = (function () {
-        function BrowserHTTPRequest(path, requestInit) {
+        function BrowserHTTPRequest(path, requestInit, weightPathPrefix) {
+            this.weightPathPrefix = weightPathPrefix;
             this.DEFAULT_METHOD = 'POST';
             if (typeof fetch === 'undefined') {
                 throw new Error('browserHTTPRequest is not supported outside the web browser without a fetch polyfill.');
@@ -16977,19 +17087,22 @@
         };
         BrowserHTTPRequest.prototype.loadWeights = function (weightsManifest) {
             return __awaiter(this, void 0, void 0, function () {
-                var weightPath, weightSpecs, _i, weightsManifest_2, entry, pathPrefix, fetchURLs, _a, _b;
+                var pathPrefix, weightPath, weightSpecs, _i, weightsManifest_2, entry, fetchURLs, _a, _b;
                 return __generator(this, function (_c) {
                     switch (_c.label) {
                         case 0:
-                            weightPath = Array.isArray(this.path) ? this.path[1] : this.path;
+                            pathPrefix = this.weightPathPrefix;
+                            if (pathPrefix == null) {
+                                weightPath = Array.isArray(this.path) ? this.path[1] : this.path;
+                                pathPrefix = weightPath.substring(0, weightPath.lastIndexOf('/'));
+                                if (!pathPrefix.endsWith('/')) {
+                                    pathPrefix = pathPrefix + '/';
+                                }
+                            }
                             weightSpecs = [];
                             for (_i = 0, weightsManifest_2 = weightsManifest; _i < weightsManifest_2.length; _i++) {
                                 entry = weightsManifest_2[_i];
                                 weightSpecs.push.apply(weightSpecs, entry.weights);
-                            }
-                            pathPrefix = weightPath.substring(0, weightPath.lastIndexOf('/'));
-                            if (!pathPrefix.endsWith('/')) {
-                                pathPrefix = pathPrefix + '/';
                             }
                             fetchURLs = [];
                             weightsManifest.forEach(function (weightsGroup) {
@@ -17033,8 +17146,8 @@
     };
     IORouterRegistry.registerSaveRouter(httpRequestRouter);
     IORouterRegistry.registerLoadRouter(httpRequestRouter);
-    function browserHTTPRequest(path, requestInit) {
-        return new BrowserHTTPRequest(path, requestInit);
+    function browserHTTPRequest(path, requestInit, weightPathPrefix) {
+        return new BrowserHTTPRequest(path, requestInit, weightPathPrefix);
     }
 
     var PassthroughLoader = (function () {
@@ -18204,6 +18317,7 @@
     exports.scatterND = scatterND;
     exports.fft = fft;
     exports.ifft = ifft;
+    exports.rfft = rfft;
     exports.sparseToDense = sparseToDense;
     exports.gatherND = gatherND;
     exports.train = train;
