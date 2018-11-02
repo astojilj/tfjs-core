@@ -236,11 +236,11 @@
       const start = performance.now();
       let res;
       for (let i = 0; i < state.numRuns; i++) {
-        if(res instanceof Promise) {
+        // if(res instanceof Promise) {
+        //   res = await predictAsync(model);
+        // } else {
           res = await predictAsync(model);
-        } else {
-          res = predict(model);
-        }
+        // }
       }
       if (res instanceof tf.Tensor) {
         res.dataSync();
@@ -286,10 +286,10 @@
           });
         }
       }
-      let res = await predict(model);
-      if (res instanceof Promise) {
-        res = await res;
-      }
+      let res = await predictAsync(model);
+      // if (res instanceof Promise) {
+      //   res = await res;
+      // }
       if (res instanceof tf.Tensor) {
         res.dataSync();
       }
