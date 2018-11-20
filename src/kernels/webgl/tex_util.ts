@@ -17,7 +17,6 @@
 
 import {Tensor} from '../../tensor';
 import {DataType, DataTypeMap} from '../../types';
-import * as util from '../../util';
 
 export enum TextureUsage {
   RENDER,
@@ -138,20 +137,21 @@ export function getPackedRGBAArraySizeFromMatrixShape(
 This is how encodeMatrixToPackedRGBA encodes a tensor with shape = [2, 3, 5]
 (indices are [batch, row, col]).
 
-000|001   002|003   004|xxx   020|021   022|023   024|xxx
--------   -------   -------   -------   -------   -------
-010|011   012|013   014|xxx   xxx|xxx   xxx|xxx   xxx|xxx
+000|001   002|003   004|xxx
+-------   -------   -------
+010|011   012|013   014|xxx
 
-100|101   102|103   104|xxx   120|121   122|123   124|xxx
--------   -------   -------   -------   -------   -------
-110|111   112|113   114|xxx   xxx|xxx   xxx|xxx   xxx|xxx
+020|021   022|023   024|xxx
+-------   -------   -------
+100|101   102|103   104|xxx
 
-Single texels contain only values from the same batch, and from adjacent rows
-and columns.
+110|111   112|113   114|xxx
+-------   -------   -------
+120|121   122|123   124|xxx
 
-Note the batch dimension is needed so xxx's are inserted below 020, 021, 022,
-023, and 024.
- */
+Single texels contain values from adjacent rows and columns. For the last row of
+the batch, adjacent is the first row of the next batch.
+*/
 
 export function encodeMatrixToPackedRGBA(
     matrix: Float32Array, batches: number, rows: number, columns: number,
@@ -161,73 +161,45 @@ export function encodeMatrixToPackedRGBA(
     throw new Error(`packedRGBA length (${packedRGBA.length}) must be >=
         ${requiredSize}`);
   }
-
-  const oddWidth = (columns % 2) === 1;
-  const oddHeight = (rows % 2) === 1;
+  
+  const srcHeightInRows = batches * rows;
+  const srcHeightInFullBlocks = Math.floor(srcHeightInRows / 2);
   const widthInFullBlocks = Math.floor(columns / 2);
-  const heightInFullBlocks = Math.floor(rows / 2);
-
-  const texelsPerRow = Math.ceil(columns / 2);
-  const texelsPerBatch = texelsPerRow * Math.ceil(rows / 2);
-
-  const flattenedMatrixSize =
-      util.nearestLargerEven(rows) * util.nearestLargerEven(columns);
-
-  for (let batch = 0; batch < batches; batch++) {
-    const sourceOffset = batch * rows * columns;
-    const batchOffset = batch * flattenedMatrixSize;
-
-    // loop over full 2x2 blocks
-    {
-      const dstStride = (oddWidth ? 4 : 0);
-      const oneRow = columns;
-      let dst = batchOffset;
-      for (let blockY = 0; blockY < heightInFullBlocks; ++blockY) {
-        const matrixSrcRow = (blockY * 2 * columns);
-        for (let blockX = 0; blockX < widthInFullBlocks; ++blockX) {
-          const matrixSrcCol = blockX * 2;
-          const src = sourceOffset + matrixSrcRow + matrixSrcCol;
-          packedRGBA[dst] = matrix[src];
-          packedRGBA[dst + 1] = matrix[src + 1];
-          packedRGBA[dst + 2] = matrix[src + oneRow];
-          packedRGBA[dst + 3] = matrix[src + oneRow + 1];
-          dst += 4;
-        }
-        dst += dstStride;
-      }
+  const oddWidth = (columns % 2) === 1;
+  const oddHeight = (srcHeightInRows % 2) === 1;
+  let srcRow1 = 0;
+  let srcRow2 = columns;
+  let dst = 0;
+  for (let j = 0; j < srcHeightInFullBlocks; j++) {
+    for (let i = 0; i < widthInFullBlocks; i++) {
+      packedRGBA[dst++] = matrix[srcRow1++];
+      packedRGBA[dst++] = matrix[srcRow1++];
+      packedRGBA[dst++] = matrix[srcRow2++];
+      packedRGBA[dst++] = matrix[srcRow2++];
     }
-
-    // loop down final odd column
     if (oddWidth) {
-      let src = sourceOffset + columns - 1;
-      let dst = batchOffset + (texelsPerRow - 1) * 4;
-      const srcStride = 2 * columns;
-      const dstStride = texelsPerRow * 4;
-      for (let blockY = 0; blockY < heightInFullBlocks; ++blockY) {
-        packedRGBA[dst] = matrix[src];
-        packedRGBA[dst + 2] = matrix[src + columns];
-        src += srcStride;
-        dst += dstStride;
-      }
+      packedRGBA[dst++] = matrix[srcRow1++];
+      packedRGBA[dst++] = 0;
+      packedRGBA[dst++] = matrix[srcRow2++];
+      packedRGBA[dst++] = 0;      
     }
-
-    // loop across final row
-    if (oddHeight) {
-      let src = sourceOffset + (rows - 1) * columns;
-      let dst = batchOffset + (texelsPerBatch - texelsPerRow) * 4;
-      for (let blockX = 0; blockX < widthInFullBlocks; ++blockX) {
-        packedRGBA[dst++] = matrix[src++];
-        packedRGBA[dst++] = matrix[src++];
-        dst += 2;
-      }
-
-      // fill in bottom-right texel
-      if (oddWidth && oddHeight) {
-        packedRGBA[batchOffset + flattenedMatrixSize - 4] = matrix[src];
-      }
+    srcRow1 = srcRow2;
+    srcRow2 += columns;
+  }
+  if (oddHeight) {
+    for (let i = 0; i < widthInFullBlocks; i++) {
+      packedRGBA[dst++] = matrix[srcRow1++];
+      packedRGBA[dst++] = matrix[srcRow1++];
+      packedRGBA[dst++] = 0;
+      packedRGBA[dst++] = 0;
+    }
+    if (oddWidth) {
+      packedRGBA[dst++] = matrix[srcRow1++];
+      packedRGBA[dst++] = 0;
+      packedRGBA[dst++] = 0;
+      packedRGBA[dst++] = 0;      
     }
   }
-
   return packedRGBA;
 }
 
@@ -240,71 +212,42 @@ export function decodeMatrixFromPackedRGBA(
         `matrix length (${matrix.length}) must be >= ${requiredSize}`);
   }
 
+  const srcWidthInFullBlocks = Math.floor(columns / 2);
+  const dstHeightInRows = batches * rows; 
+  const srcHeightInFullBlocks = Math.floor(dstHeightInRows / 2);
   const oddWidth = (columns % 2) === 1;
-  const oddHeight = (rows % 2) === 1;
-  const widthInFullBlocks = Math.floor(columns / 2);
-  const heightInFullBlocks = Math.floor(rows / 2);
+  const oddHeight = (dstHeightInRows % 2) === 1;
 
-  const texelsPerRow = Math.ceil(columns / 2);
-  const texelsPerBatch = texelsPerRow * Math.ceil(rows / 2);
-
-  const flattenedMatrixSize =
-      util.nearestLargerEven(rows) * util.nearestLargerEven(columns);
-
-  for (let batch = 0; batch < batches; batch++) {
-    const batchOffset = batch * rows * columns;
-    const sourceOffset = batch * flattenedMatrixSize;
-
+  let dstRow1 = 0;
+  let dstRow2 = columns;
+  let src = 0;
+  for (let j = 0; j < srcHeightInFullBlocks; j++) {
     // loop over full 2x2 blocks
-    {
-      const srcStride = oddWidth ? 4 : 0;
-      const dstStride = columns + (oddWidth ? 1 : 0);
-      let src = sourceOffset;
-      let dstRow1 = batchOffset;
-      let dstRow2 = batchOffset + columns;
-      for (let blockY = 0; blockY < heightInFullBlocks; ++blockY) {
-        for (let blockX = 0; blockX < widthInFullBlocks; ++blockX) {
-          matrix[dstRow1++] = packedRGBA[src++];
-          matrix[dstRow1++] = packedRGBA[src++];
-          matrix[dstRow2++] = packedRGBA[src++];
-          matrix[dstRow2++] = packedRGBA[src++];
-        }
-        src += srcStride;
-        dstRow1 += dstStride;
-        dstRow2 += dstStride;
-      }
-    }
-
-    // loop down final column
+    for (let i = 0; i < srcWidthInFullBlocks; i++) {
+      matrix[dstRow1++] = packedRGBA[src++];
+      matrix[dstRow1++] = packedRGBA[src++];
+      matrix[dstRow2++] = packedRGBA[src++];
+      matrix[dstRow2++] = packedRGBA[src++];
+    }    
     if (oddWidth) {
-      let src = sourceOffset + (texelsPerRow - 1) * 4;
-      let dst = batchOffset + columns - 1;
-      const srcStride = texelsPerRow * 4;
-      const dstStride = 2 * columns;
-      for (let blockY = 0; blockY < heightInFullBlocks; ++blockY) {
-        matrix[dst] = packedRGBA[src];
-        matrix[dst + columns] = packedRGBA[src + 2];
-        src += srcStride;
-        dst += dstStride;
-      }
+      matrix[dstRow1++] = packedRGBA[src++];
+      src++;
+      matrix[dstRow2++] = packedRGBA[src++];
+      src++;
     }
-
-    // loop across final row
+    dstRow1 += columns;
+    dstRow2 = dstRow1 + columns;
+  }
+  // loop across final row
+  if (oddHeight) {
+    for (let i = 0; i < srcWidthInFullBlocks; i++) {
+      matrix[dstRow1++] = packedRGBA[src++];
+      matrix[dstRow1++] = packedRGBA[src++];
+      src += 2;
+    }    
     if (oddHeight) {
-      let src = sourceOffset + (texelsPerBatch - texelsPerRow) * 4;
-      let dst = batchOffset + (rows - 1) * columns;
-      for (let blockX = 0; blockX < widthInFullBlocks; ++blockX) {
-        matrix[dst++] = packedRGBA[src++];
-        matrix[dst++] = packedRGBA[src++];
-        src += 2;
-      }
-
-      // fill in bottom-right cell
-      if (oddWidth) {
-        matrix[batchOffset + (rows * columns) - 1] = packedRGBA[src];
-      }
+      matrix[dstRow1++] = packedRGBA[src++];
     }
   }
-
   return matrix;
 }

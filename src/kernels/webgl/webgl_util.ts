@@ -330,19 +330,6 @@ function validateTextureUnit(gl: WebGLRenderingContext, textureUnit: number) {
 export function getTextureShapeFromLogicalShape(
     logShape: number[], isPacked = false): [number, number] {
   let maxTexSize = ENV.get('WEBGL_MAX_TEXTURE_SIZE');
-  if (isPacked) {
-    maxTexSize = maxTexSize * 2;
-
-    // This logic ensures we accurately count the number of packed texels needed
-    // to accommodate the tensor. We can only pack values in the same texel if
-    // they are from adjacent pairs of rows/cols within the same batch. So if a
-    // tensor has 3 rows, we pretend it has 4 rows in order to account for the
-    // fact that the texels containing the third row are half empty.
-    logShape = logShape.map(
-        (d, i) => i >= logShape.length - 2 ?
-            util.nearestLargerEven(logShape[i]) :
-            logShape[i]);
-  }
 
   // If logical shape is 2, we don't squeeze, since we want to match physical.
   if (logShape.length !== 2) {
@@ -350,33 +337,61 @@ export function getTextureShapeFromLogicalShape(
     logShape = squeezeResult.newShape;
   }
 
+  if (isPacked) {
+    maxTexSize = maxTexSize * 2;
+    // This logic ensures we accurately count the number of packed texels needed
+    // to accommodate the tensor. We can only pack values in the same texel if
+    // they are from adjacent pairs of rows/cols. For the last row of the batch,
+    // adjacent is the first row of the next batch. So if a tensor has 3 rows,
+    // we pretend it has 4 rows in order to account for the fact that the texels
+    // containing the third row are half empty.
+    logShape = logShape.map((d, i) => {
+      if (i === 0 && logShape.length === 2 && logShape[0] === 1) {
+        // Special case: when there is only one row we need to double the height
+        // as only pixel.rg are used for row content.
+        return 2;
+      }
+      // Rows are padded to even length.
+      return (i === logShape.length - 1) ? util.nearestLargerEven(logShape[i])
+                                         : logShape[i];
+    });
+  }
+
+  let texShape: [number, number];
   const size = util.sizeFromShape(logShape);
   if (logShape.length <= 1 && size <= maxTexSize) {
-    return [size, 1];
+    texShape = isPacked ? [size, 2] : [size, 1];
   } else if (
       logShape.length === 2 && logShape[0] <= maxTexSize &&
       logShape[1] <= maxTexSize) {
-    return logShape as [number, number];
+    texShape = logShape as [number, number];
   } else if (
       logShape.length === 3 && logShape[0] * logShape[1] <= maxTexSize &&
       logShape[2] <= maxTexSize) {
-    return [logShape[0] * logShape[1], logShape[2]];
+    texShape = [logShape[0] * logShape[1], logShape[2]];
   } else if (
       logShape.length === 3 && logShape[0] <= maxTexSize &&
       logShape[1] * logShape[2] <= maxTexSize) {
-    return [logShape[0], logShape[1] * logShape[2]];
+    texShape =  [logShape[0], logShape[1] * logShape[2]];
   } else if (
       logShape.length === 4 &&
       logShape[0] * logShape[1] * logShape[2] <= maxTexSize &&
       logShape[3] <= maxTexSize) {
-    return [logShape[0] * logShape[1] * logShape[2], logShape[3]];
+    texShape =  [logShape[0] * logShape[1] * logShape[2], logShape[3]];
   } else if (
       logShape.length === 4 && logShape[0] <= maxTexSize &&
       logShape[1] * logShape[2] * logShape[3] <= maxTexSize) {
-    return [logShape[0], logShape[1] * logShape[2] * logShape[3]];
+    texShape =  [logShape[0], logShape[1] * logShape[2] * logShape[3]];
   } else {
-    return util.sizeToSquarishShape(size);
+    texShape = util.sizeToSquarishShape(size);
   }
+  if (isPacked) {
+    // Ensure that packed texture has even width and height, even it could lead
+    // to maxTexSize - e.g. 6x12 shape is sizeToSquarishShape-ed to 8x9.
+    texShape[0] = util.nearestLargerEven(texShape[0]);
+    texShape[1] = util.nearestLargerEven(texShape[1]);
+  }
+  return texShape;
 }
 
 function isEven(n: number): boolean {
@@ -415,17 +430,11 @@ export function isReshapeFree(shape1: number[], shape2: number[]): boolean {
         (shape1[0] === 1 || shape2[0] === 1)) {
       return true;
     }
-  } else {
-    if (isEven(shape1[0]) && isEven(shape2[0])) {
-      if (isEven(shape1[1]) && isEven(shape2[1])) {
-        return true;
-      }
-
-      if (shape1[1] === shape2[1]) {
-        return true;
-      }
-    }
+  } else if (shape1[1] === shape2[1]) {
+    return true;
+  } else if (isEven(shape1[0]) && isEven(shape2[0]) &&
+             isEven(shape1[1]) && isEven(shape2[1])) {
+    return true;
   }
-
   return false;
 }

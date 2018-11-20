@@ -411,7 +411,7 @@ function getOutputPacked1DCoords(
     int getOutputCoords() {
       ivec2 resTexRC = ivec2(resultUV.yx *
                              vec2(${packedTexShape[0]}, ${packedTexShape[1]}));
-      return resTexRC.x * ${packedTexShape[1]} + resTexRC.y;
+      return resTexRC.x * ${packedTexShape[1] * 2} + resTexRC.y;
     }
   `;
 }
@@ -445,21 +445,19 @@ function getOutputPacked3DCoords(
     shape: [number, number, number], texShape: [number, number]): string {
   const packedTexShape =
       [Math.ceil(texShape[0] / 2), Math.ceil(texShape[1] / 2)];
-  const texelsInLogicalRow = Math.ceil(shape[2] / 2);
-  const texelsInBatch = texelsInLogicalRow * Math.ceil(shape[1] / 2);
-
+  
+  const rowSize = Math.ceil(shape[2] / 2); // Packed row length, in pixels.
+  
   return `
     ivec3 getOutputCoords() {
       ivec2 resTexRC = ivec2(resultUV.yx *
                              vec2(${packedTexShape[0]}, ${packedTexShape[1]}));
-      int index = resTexRC.x * ${packedTexShape[1]} + resTexRC.y;
-
-      int b = index / ${texelsInBatch};
-      index -= b * ${texelsInBatch};
-
-      int r = 2 * (index / ${texelsInLogicalRow});
-      int c = imod(index, ${texelsInLogicalRow}) * 2;
-
+      int index = (resTexRC.x * ${packedTexShape[1]} + resTexRC.y);
+      int rowCount = index / ${rowSize};
+      int c = 2 * (index - rowCount * ${rowSize});
+      int r = 2 * rowCount;
+      int b = r / ${shape[1]};
+      r -= b * ${shape[1]};
       return ivec3(b, r, c);
     }
   `;
@@ -487,25 +485,20 @@ function getOutputPacked4DCoords(
   const packedTexShape =
       [Math.ceil(texShape[0] / 2), Math.ceil(texShape[1] / 2)];
 
-  const texelsInLogicalRow = Math.ceil(shape[3] / 2);
-  const texelsInBatch = texelsInLogicalRow * Math.ceil(shape[2] / 2);
-  const texelsInBatch2 = texelsInBatch * shape[1];
-
+  const rowSize = Math.ceil(shape[3] / 2); // Packed row length, in pixels.
+  
   return `
     ivec4 getOutputCoords() {
       ivec2 resTexRC = ivec2(resultUV.yx *
                              vec2(${packedTexShape[0]}, ${packedTexShape[1]}));
       int index = resTexRC.x * ${packedTexShape[1]} + resTexRC.y;
-
-      int b2 = index / ${texelsInBatch2};
-      index -= b2 * ${texelsInBatch2};
-
-      int b = index / ${texelsInBatch};
-      index -= b * ${texelsInBatch};
-
-      int r = 2 * (index / ${texelsInLogicalRow});
-      int c = imod(index, ${texelsInLogicalRow}) * 2;
-
+      int rowCount = index / ${rowSize};
+      int c = 2 * (index - rowCount * ${rowSize});
+      int r = 2 * rowCount;
+      int b2 = r / ${shape[1] * shape[2]};
+      r -= b2 * ${shape[1] * shape[2]};
+      int b = r / ${shape[2]};
+      r -= b * ${shape[2]};
       return ivec4(b2, b, r, c);
     }
   `;
@@ -588,9 +581,7 @@ function getOutputPacked2DCoords(
   /**
    * getOutputCoords
    *
-   * resTexRC: The rows and columns of the texels. If you move over one
-   * texel to the right in the packed texture, you are moving over one column
-   * (not two).
+   * resTexRC: The rows and columns of the texels.
    *
    * index: The texel index
    */
@@ -815,13 +806,32 @@ function getPackedSampler3D(inputInfo: InputInfo): string {
   const texNumC = packedTexShape[1];
 
   const valuesPerRow = Math.ceil(shape[2] / 2);
-  const texelsInBatch = valuesPerRow * Math.ceil(shape[1] / 2);
-
+  if (shape[1] % 2 === 0) {
+    const texelsInBatch = valuesPerRow * shape[1] / 2;
+    return `
+      vec4 ${funcName}(int b, int row, int col) {
+        vec2 uv = packedUVfrom3D(
+          ${texNumR}, ${texNumC}, ${texelsInBatch},
+          ${valuesPerRow}, b, row, col);
+        return texture2D(${texName}, uv);
+      }
+    `;      
+  }
   return `
     vec4 ${funcName}(int b, int row, int col) {
-      vec2 uv = packedUVfrom3D(
-        ${texNumR}, ${texNumC}, ${texelsInBatch}, ${valuesPerRow}, b, row, col);
-      return texture2D(${texName}, uv);
+      int rowCount = b * ${shape[1]} + row;
+      int packedRowCount = rowCount / 2;
+      int index = packedRowCount * ${valuesPerRow} + col / 2;
+      int texR = index / ${texNumC};
+      int texC = index - texR * ${texNumC};
+      vec2 uv = (vec2(texC, texR) + halfCR) / vec2(${texNumC}, ${texNumR});
+      vec4 value = texture2D(${texName}, uv);
+      if (rowCount - packedRowCount * 2 == 0) {
+        return value;
+      }
+      vec2 uv1 = uv + vec2(0.0, 1.0) / vec2(${texNumC}, ${texNumR});
+      vec4 value1 = texture2D(${texName}, uv1);
+      return vec4(value.ba, value1.rg);
     }
   `;
 }
@@ -905,15 +915,34 @@ function getPackedSampler4D(inputInfo: InputInfo): string {
   const texNumC = packedTexShape[1];
 
   const valuesPerRow = Math.ceil(shape[3] / 2);
-  const texelsInBatch = valuesPerRow * Math.ceil(shape[2] / 2);
-  const texelsInBatch2 = texelsInBatch * shape[1];
 
+  if (shape[2] % 2 === 0) {
+    const texelsInBatch = valuesPerRow * shape[2] / 2;
+    const texelsInBatch2 = texelsInBatch * shape[1];
+    return `
+      vec4 ${funcName}(int b2, int b, int row, int col) {
+        vec2 uv = packedUVfrom4D(
+          ${texNumR}, ${texNumC}, ${texelsInBatch2},
+          ${texelsInBatch}, ${valuesPerRow}, b2, b, row, col);
+          return texture2D(${texName}, uv);
+      }
+    `;      
+  }
   return `
     vec4 ${funcName}(int b2, int b, int row, int col) {
-      vec2 uv = packedUVfrom4D(
-        ${texNumR}, ${texNumC}, ${texelsInBatch2},
-        ${texelsInBatch}, ${valuesPerRow}, b2, b, row, col);
-      return texture2D(${texName}, uv);
+      int rowCount = (b2 * ${shape[1]} + b) * ${shape[2]} + row;
+      int packedRowCount = rowCount / 2;
+      int index = packedRowCount * ${valuesPerRow} + col / 2;
+      int texR = index / ${texNumC};
+      int texC = index - texR * ${texNumC};
+      vec2 uv = (vec2(texC, texR) + halfCR) / vec2(${texNumC}, ${texNumR});
+      vec4 value = texture2D(${texName}, uv);
+      if (rowCount - packedRowCount * 2 == 0) {
+        return value;
+      }
+      vec2 uv1 = uv + vec2(0.0, 1.0) / vec2(${texNumC}, ${texNumR});
+      vec4 value1 = texture2D(${texName}, uv1);
+      return vec4(value.ba, value1.rg);
     }
   `;
 }

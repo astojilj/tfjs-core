@@ -31,18 +31,21 @@ export class ReshapePackedProgram implements GPGPUProgram {
     this.outputShape = outputShape;
 
     let mainLoop = ``;
+    const componentSetup = [
+      'thisRC = rc;',
+      `thisRC.z += 1;
+       if(thisRC.z < cols) {
+      `,
+      `}
+       thisRC = (rc.y + 1 == rows) ? ivec3(rc.x + 1, 0, rc.z)
+                                   : ivec3(rc.x, rc.y + 1, rc.z);
+       if(thisRC.x < batches && thisRC.y < rows) {`,
+      `  thisRC.z += 1;
+         if(thisRC.z < cols) {`
+    ];
     for (let i = 0; i < 4; i++) {
-      let thisRC = `thisRC = rc;`;
-      if (i % 2 === 1) {
-        thisRC += `thisRC.z += 1;`;
-      }
-      if (i > 1) {
-        thisRC += `thisRC.y += 1;`;
-      }
-
       mainLoop += `
-        ${thisRC}
-        ${i > 0 ? `if(thisRC.y < rows && thisRC.z < cols){` : ''}
+        ${componentSetup[i]}
           int flatIndex = getFlatIndex(thisRC);
 
           ivec3 inputRC = inputCoordsFromReshapedOutCoords(flatIndex);
@@ -50,9 +53,11 @@ export class ReshapePackedProgram implements GPGPUProgram {
 
           result[${i}] =
             getChannel(getA(inputRC.x, inputRC.y, inputRC.z), inputRCInnerDims);
-        ${i > 0 ? '}' : ''}
       `;
     }
+    mainLoop += `
+         }
+       }`;
 
     this.userCode = `
       ${getReshapedInputCoords(inputShape)}
@@ -64,6 +69,7 @@ export class ReshapePackedProgram implements GPGPUProgram {
         vec4 result = vec4(0.);
 
         ivec3 thisRC;
+        int batches = ${outputShape[0]};
         int rows = ${outputShape[1]};
         int cols = ${outputShape[2]};
 

@@ -111,6 +111,19 @@ describeWithFlags('getTextureShapeFromLogicalShape packed', WEBGL_ENVS, () => {
     tf.ENV.set('WEBGL_MAX_TEXTURE_SIZE', max);
     expect(texShape).toEqual([4, 6]);
   });
+
+  it('two row shape accounts for packing constraints', () => {
+    const isPacked = true;
+    const max = tf.ENV.get('WEBGL_MAX_TEXTURE_SIZE');
+
+    tf.ENV.set('WEBGL_MAX_TEXTURE_SIZE', 4);
+    const logicalShape = [2, 15];
+    const texShape =
+        webgl_util.getTextureShapeFromLogicalShape(logicalShape, isPacked);
+
+    tf.ENV.set('WEBGL_MAX_TEXTURE_SIZE', max);
+    expect(texShape).toEqual([4, 8]);
+  });
 });
 
 describeWithFlags('isReshapeFree', WEBGL_ENVS, () => {

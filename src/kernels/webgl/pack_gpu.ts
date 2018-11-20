@@ -36,9 +36,7 @@ export class PackProgram implements GPGPUProgram {
     const dtype = getCoordsDataType(rank);
     const outOfBoundsCondition =
         getOutOfBoundsCondition(rank, outputShape, channels);
-    const setup = getSetup(
-        rank, outputShape[outputShape.length - 1],
-        outputShape[outputShape.length - 2], channels);
+    const setup = getSetup(outputShape, channels, dtype);
     const output = getOutput(outputShape, channels);
 
     this.userCode = `
@@ -58,18 +56,15 @@ export class PackProgram implements GPGPUProgram {
 }
 
 function getSourceCoordsArr(rank: number, dims: string[]): string[] {
+  const dimsp1 = getChannels('rcp1', rank);
   const coords = [];
-
-  for (let row = 0; row <= 1; row++) {
-    for (let col = 0; col <= 1; col++) {
-      let coord = `${row === 0 ? 'r' : 'rp1'}, ${col === 0 ? 'c' : 'cp1'}`;
-
-      for (let d = 2; d < rank; d++) {
-        coord = `${dims[dims.length - 1 - d]},` + coord;
-      }
-
-      coords.push(coord);
+  for (let i = 0; i < 4; i++) {
+    let coord = (i > 1 ? dimsp1[dims.length - 2] : dims[dims.length - 2]) + ', '
+        + ((i % 2 === 0) ? dims[dims.length - 1] : dimsp1[dims.length - 1]);
+    for (let d = rank - 3; d >= 0; d--) {
+      coord = (i > 1 ? dimsp1[d] : dims[d]) + ', ' + coord;
     }
+    coords.push(coord);
   }
   return coords;
 }
@@ -81,7 +76,7 @@ function getOutOfBoundsCondition(
   }
 
   let cond = '';
-  for (let i = rank - 2; i < rank; i++) {
+  for (let i = 0; i < rank; i++) {
     cond += `${dims[i]} >= ${shape[i]}`;
     if (i < rank - 1) {
       cond += '||';
@@ -91,23 +86,34 @@ function getOutOfBoundsCondition(
   return cond;
 }
 
-function getSetup(
-    rank: number, cols: number, rows: number, dims: string[]): string {
+function getSetup(shape: number[], dims: string[], dtype: string): string {
+  const rank = shape.length;
   if (rank === 1) {
     return '';
   }
+  const rows = shape[shape.length - 2];
+  const columns = shape[shape.length - 1];
 
-  const innerDims = dims.slice(-2);
-
-  return `
-    int r = ${innerDims[0]};
-    int c = ${innerDims[1]};
-    int rp1 = r + 1;
-    int cp1 = c + 1;
-
-    bool cEdge = cp1 >= ${cols};
-    bool rEdge = rp1 >= ${rows};
-  `;
+  let src = `
+      ${dtype} rcp1 = rc + ` + (rank === 2 ? 'ivec2(1, 1)' :
+                                rank === 3 ? 'ivec3(0, 1, 1)' :
+                                             'ivec4(0, 0, 1, 1)') + ';';
+  // edge[0] and edge[1] refer to components below (row + 1) and to the right
+  // (column + 1) being out of bounds, respectivelly. 
+  src += `
+      bvec2 edge = greaterThanEqual(` +
+          (rank === 2 ? 'rcp1' : rank === 3 ? 'rcp1.gb' : 'rcp1.ba') +
+              `, ivec2(${rows}, ${columns}));`;
+  // Handle when row + 1 carries over to the next batch.
+  for (let i = 3; i <= rank; i++) {
+    src +=`
+        if (rcp1[${shape.length - i + 1}] == ${shape[shape.length - i + 1]}) {
+          rcp1[${shape.length - i + 1}] = 0;
+          rcp1[${shape.length - i}]++;
+          edge[0] = rcp1[${shape.length - i}] >= ${shape[shape.length - i]};
+        }`;
+  }
+  return src;
 }
 
 function getOutput(shape: number[], dims: string[]): string {
@@ -118,9 +124,8 @@ function getOutput(shape: number[], dims: string[]): string {
             rc + 1 >= ${shape[0]} ? 0. : getA(rc + 1),
             0, 0`;
   }
-
   return `getA(${sourceCoords[0]}),
-          cEdge ? 0. : getA(${sourceCoords[1]}),
-          rEdge ? 0. : getA(${sourceCoords[2]}),
-          rEdge || cEdge ? 0. : getA(${sourceCoords[3]})`;
+          edge[1] ? 0. : getA(${sourceCoords[1]}),
+          edge[0] ? 0. : getA(${sourceCoords[2]}),
+          any(edge) ? 0. : getA(${sourceCoords[3]})`;
 }
