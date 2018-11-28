@@ -367,15 +367,23 @@ const SHADER_PREFIX = `
 `;
 
 const SHADER_PACKED_PREFIX = `
-  float getChannel(vec4 frag, vec2 innerDims) {
-    vec2 modCoord = mod(innerDims, 2.);
-    return modCoord.x == 0. ?
-      (modCoord.y == 0. ? frag.r : frag.g) :
-      (modCoord.y == 0. ? frag.b : frag.a);
-  }
   float getChannel(vec4 frag, int dim) {
     float modCoord = mod(float(dim), 2.);
     return modCoord == 0. ? frag.r : frag.g;
+  }
+  float getChannel(vec4 frag, ivec4 dims) {
+    return getChannel(frag, dims.a);
+  }
+  // 3-D and 4-D sampling already provides proper components so we just need to
+  // swizzle left and right component.
+  float getChannel(vec4 frag, ivec3 dims) {
+    return getChannel(frag, dims.b);
+  }
+  float getChannel(vec4 frag, ivec2 dims) {
+    vec2 modCoord = mod(vec2(dims), 2.);
+    return modCoord.x == 0. ?
+      (modCoord.y == 0. ? frag.r : frag.g) :
+      (modCoord.y == 0. ? frag.b : frag.a);
   }
 `;
 

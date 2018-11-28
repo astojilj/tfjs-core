@@ -138,9 +138,25 @@ describeWithFlags('packed matmul', WEBGL_ENVS, () => {
        const a = tf.tensor2d([1, 2, 3, 4, 5, 6, 7, 8, 9], [9, 1]);
        const b = tf.tensor2d([1], [1, 1]);
        const c = tf.matMul(a, b);
-
        const d = tf.reshape(c, [1, 3, 3, 1]);
        const e = tf.add(d, 1);
+       expectArraysClose(e, [2, 3, 4, 5, 6, 7, 8, 9, 10]);
+     });
+
+  // TODO(astojilj): Remove the test when WEBGL_LAZILY_UNPACK is set by default.
+  // tslint:disable-next-line:max-line-length
+  it('works when followed by a packed reshape that changes texture layout, and then an unpacked op',
+     () => {
+       const a = tf.tensor2d([1, 2, 3, 4, 5, 6, 7, 8, 9], [9, 1]);
+       const b = tf.tensor2d([1], [1, 1]);
+       const currentValue = tf.ENV.get('WEBGL_LAZILY_UNPACK');
+       tf.ENV.set('WEBGL_LAZILY_UNPACK', true);
+       const c = tf.matMul(a, b);
+       const d = tf.reshape(c, [1, 3, 3, 1]);
+       // Reshape produces packed output and add is unpacking the input as it
+       // doesn't yet support packing.
+       const e = tf.add(d, 1);
+       tf.ENV.set('WEBGL_LAZILY_UNPACK', currentValue);
        expectArraysClose(e, [2, 3, 4, 5, 6, 7, 8, 9, 10]);
      });
 

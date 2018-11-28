@@ -33,15 +33,12 @@ export class UnpackProgram implements GPGPUProgram {
     const channels = getChannels('rc', rank);
     const dtype = getCoordsDataType(rank);
     const sourceCoords = getSourceCoords(rank, channels);
-    const innerDims = channels.slice(-2);
-    const coords = rank === 1 ? 'rc' : `vec2(${innerDims.join(',')})`;
 
     this.userCode = `
       void main() {
         ${dtype} rc = getOutputCoords();
         vec4 packedInput = getA(${sourceCoords});
-
-        setOutput(getChannel(packedInput, ${coords}));
+        setOutput(getChannel(packedInput, rc));
       }
     `;
   }

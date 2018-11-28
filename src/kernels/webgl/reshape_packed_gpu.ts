@@ -49,10 +49,8 @@ export class ReshapePackedProgram implements GPGPUProgram {
           int flatIndex = getFlatIndex(thisRC);
 
           ivec3 inputRC = inputCoordsFromReshapedOutCoords(flatIndex);
-          vec2 inputRCInnerDims = vec2(float(inputRC.y),float(inputRC.z));
-
           result[${i}] =
-            getChannel(getA(inputRC.x, inputRC.y, inputRC.z), inputRCInnerDims);
+            getChannel(getA(inputRC.x, inputRC.y, inputRC.z), inputRC.yz);
       `;
     }
     mainLoop += `
