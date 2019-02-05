@@ -144,6 +144,11 @@ function mapActivationToShaderProgram(
       return unary_packed_op.RELU;
     }
     return unary_op.RELU;
+  } else if (activation === 'relu6') {
+    if (packed) {
+      return 'return clamp(x, vec4(0.0), vec4(6.0));';
+    }
+    return 'return clamp(x, 0.0, 6.0);';
   }
   throw new Error(`Activation ${
       activation} has not been implemented for the WebGL backend.`);
@@ -1644,12 +1649,14 @@ export class MathBackendWebGL implements KernelBackend {
     return this.compileAndRun(program, [x]) as T;
   }
 
-  conv2dByMatMul(x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo):
-      Tensor4D {
+  fusedPointwiseConv2dBiasActivate(
+      x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo, bias?: Tensor,
+      activation?: Activation): Tensor4D {
     // Reshapes conv2D input to 2D tensors, uses matMul and then reshape the
     // result from 2D to 4D.
     const xShape = x.shape;
     const xTexData = this.texData.get(x.dataId);
+
     if (!ENV.get('WEBGL_LAZILY_UNPACK') ||
         !ENV.get('WEBGL_PACK_BINARY_OPERATIONS') || xShape[2] % 2 === 0 ||
         !xTexData.isPacked) {
@@ -1662,7 +1669,8 @@ export class MathBackendWebGL implements KernelBackend {
               filter, [1, convInfo.inChannels, convInfo.outChannels]) as
           Tensor3D;
       return this.reshape<Rank.R4>(
-          this.batchMatMul(xReshaped, filterReshaped, false, false),
+          this.fusedBatchMatMul(
+              xReshaped, filterReshaped, false, false, bias, activation),
           convInfo.outShape);
     }
 
@@ -1687,8 +1695,8 @@ export class MathBackendWebGL implements KernelBackend {
         this.reshape(filter, [1, convInfo.inChannels, convInfo.outChannels]) as
         Tensor3D;
 
-    const pointwiseConv =
-        this.batchMatMul(xReshaped, filterReshaped, false, false);
+    const pointwiseConv = this.fusedBatchMatMul(
+        xReshaped, filterReshaped, false, false, bias, activation);
     const pointwiseConvTexData = this.texData.get(pointwiseConv.dataId);
     util.assert(
         pointwiseConvTexData.isPacked,
@@ -1747,7 +1755,7 @@ export class MathBackendWebGL implements KernelBackend {
         convInfo.strideHeight === 1 && convInfo.strideWidth === 1 &&
         (convInfo.padInfo.type === 'SAME' ||
          convInfo.padInfo.type === 'VALID')) {
-      return this.conv2dByMatMul(x, filter, convInfo);
+      return this.fusedPointwiseConv2dBiasActivate(x, filter, convInfo);
     }
     if (ENV.get('WEBGL_CONV_IM2COL') && x.shape[0] === 1) {
       return this.conv2dWithIm2Row(x, filter, convInfo);

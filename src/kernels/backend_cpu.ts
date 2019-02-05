@@ -1832,6 +1832,12 @@ export class MathBackendCPU implements KernelBackend {
     return dw.toTensor();
   }
 
+  fusedPointwiseConv2dBiasActivate(
+      x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo, bias: Tensor,
+      activation: Activation): Tensor4D {
+    throw new Error('Not yet implemented');
+  }
+
   depthwiseConv2D(x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo):
       Tensor4D {
     this.assertNotComplex([x, filter], 'depthwiseConv2D');

@@ -402,6 +402,11 @@ export class KernelBackend implements TensorStorage, Backend, BackendTimer {
   conv2dDerFilter(x: Tensor4D, dY: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
     throw new Error('Not yet implemented');
   }
+  fusedPointwiseConv2dBiasActivate(
+      x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo, bias: Tensor,
+      activation: Activation): Tensor4D {
+    throw new Error('Not yet implemented');
+  }
 
   depthwiseConv2D(input: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo):
       Tensor4D {

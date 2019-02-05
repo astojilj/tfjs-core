@@ -17,13 +17,15 @@
 
 import {ENV} from '../environment';
 import {op} from '../ops/operation';
-import {Tensor, Tensor3D} from '../tensor';
+import {Tensor, Tensor3D, Tensor4D} from '../tensor';
 import {makeTypesMatch} from '../tensor_util';
 import {convertToTensor} from '../tensor_util_env';
 import {TensorLike} from '../types';
 import * as util from '../util';
 
 import * as broadcast_util from './broadcast_util';
+import {conv2d} from './conv';
+import * as conv_util from './conv_util';
 import {Activation} from './fused_util';
 
 /**
@@ -172,6 +174,122 @@ function matMul_<T extends Tensor>(
   return res.reshape(outShape) as T;
 }
 
+/**
+ * Computes a 2D convolution over the input x followed by bias and activation.
+ *
+ * @param x The input tensor, of rank 4 or rank 3, of shape
+ *     `[batch, height, width, inChannels]`. If rank 3, batch of 1 is
+ * assumed.
+ * @param filter The filter, rank 4, of shape
+ *     `[filterHeight, filterWidth, inDepth, outDepth]`.
+ * @param strides The strides of the convolution: `[strideHeight,
+ * strideWidth]`.
+ * @param pad The type of padding algorithm.
+ *    - `same` and stride 1: output will be of same size as input,
+ *       regardless of filter size.
+ *    - `valid`: output will be smaller than input if filter is larger
+ *       than 1x1.
+ *   - For more info, see this guide:
+ *     [https://www.tensorflow.org/api_guides/python/nn#Convolution](
+ *          https://www.tensorflow.org/api_guides/python/nn#Convolution)
+ * @param dataFormat: An optional string from: "NHWC", "NCHW". Defaults to
+ *     "NHWC". Specify the data format of the input and output data. With the
+ *     default format "NHWC", the data is stored in the order of: [batch,
+ *     height, width, channels]. Only "NHWC" is currently supported.
+ * @param dilations The dilation rates: `[dilationHeight, dilationWidth]`
+ *     in which we sample input values across the height and width dimensions
+ *     in atrous convolution. Defaults to `[1, 1]`. If `dilations` is a single
+ *     number, then `dilationHeight == dilationWidth`. If it is greater than
+ *     1, then all values of `strides` must be 1.
+ * @param Tensor to be added to the result, after conv2D and before relu.
+ * @param activation Name of activation kernel (defaults to `linear`).
+ * @param dimRoundingMode The rounding mode used when computing output
+ *     dimensions if pad is a number. If none is provided, it will not round
+ *     and error if the output is of fractional size.
+ */
+/** @doc {heading: 'Operations', subheading: 'Convolution'} */
+function conv2dAddActivate_<T extends Tensor3D|Tensor4D>(
+    x: T|TensorLike, filter: Tensor4D|TensorLike,
+    strides: [number, number]|number, pad: 'valid'|'same'|number,
+    dataFormat: 'NHWC'|'NCHW' = 'NHWC',
+    dilations: [number, number]|number = [1, 1], bias: Tensor|TensorLike,
+    activation: Activation, dimRoundingMode?: 'floor'|'round'|'ceil'): T {
+  const $filter = convertToTensor(filter, 'filter', 'conv2d');
+  const filterShape = $filter.shape;
+  const dilationOne = (typeof dilations === 'number') ?
+      (dilations === 1) :
+      (dilations[0] === 1 && dilations[1] === 1);
+  const strideOne = (typeof strides === 'number') ?
+      (strides === 1) :
+      (strides[0] === 1 && strides[1] === 1);
+  if (filterShape[0] === 1 && filterShape[1] === 1 && dilationOne &&
+      strideOne && (pad === 'same' || pad === 'valid')) {
+    const $x = convertToTensor(x, 'x', 'conv2d');
+    let x4D = $x as Tensor4D;
+    let reshapedTo4D = false;
+
+    if ($x.rank === 3) {
+      reshapedTo4D = true;
+      x4D = $x.as4D(1, $x.shape[0], $x.shape[1], $x.shape[2]);
+    }
+
+    // TODO(astojilj): Extract common validation code to conv_utils.
+    util.assert(
+        x4D.rank === 4,
+        `Error in conv2d: input must be rank 4, but got rank ${x4D.rank}.`);
+    util.assert(
+        $filter.rank === 4,
+        `Error in conv2d: filter must be rank 4, but got rank ` +
+            `${$filter.rank}.`);
+    util.assert(
+        !dimRoundingMode,
+        `Error in conv2d: pad must be an integer when using, ` +
+            `dimRoundingMode ${dimRoundingMode} but got pad ${pad}.`);
+    util.assert(
+        x4D.shape[3] === $filter.shape[2],
+        `Error in conv2d: depth of input (${x4D.shape[3]}) must match ` +
+            `input depth for filter ${$filter.shape[2]}.`);
+    util.assert(
+        conv_util.eitherStridesOrDilationsAreOne(strides, dilations),
+        'Error in conv2D: Either strides or dilations must be 1. ' +
+            `Got strides ${strides} and dilations '${dilations}'`);
+    util.assert(
+        dataFormat === 'NHWC',
+        `Error in conv2d: got dataFormat of ${
+            dataFormat} but only NHWC is currently supported.`);
+
+    const convInfo = conv_util.computeConv2DInfo(
+        x4D.shape, $filter.shape, strides, dilations, pad, dimRoundingMode);
+
+    let $bias =
+        convertToTensor(bias, 'bias', 'fusedPointwiseConv2dBiasActivate');
+    [$bias] = makeTypesMatch($bias, $x);
+    const outShape = $x.shape.slice(0, -1).concat(filterShape.slice(-1));
+    broadcast_util.assertAndGetBroadcastShape(outShape, $bias.shape);
+
+    const res =
+        ENV.engine.runKernel(
+            (backend, save) => save(backend.fusedPointwiseConv2dBiasActivate(
+                x4D, $filter, convInfo, $bias, activation)),
+            {x: x4D, $filter, $bias}) as T;
+
+    return reshapedTo4D ?
+        (res.as3D(res.shape[1], res.shape[2], res.shape[3]) as T) :
+        res;
+  }
+
+  const res =
+      conv2d(x, $filter, strides, pad, dataFormat, dilations, dimRoundingMode)
+          .add(bias) as T;
+  if (activation === 'relu6') {
+    return res.clipByValue(0, 6) as T;
+  } else if (activation === 'relu') {
+    return res.relu() as T;
+  }
+  return res;
+}
+
 export const matMul = op({matMul_});
+export const conv2dAddActivate = op({conv2dAddActivate_});
 
 export {Activation};

@@ -378,6 +378,8 @@ export class Environment {
       return false;
     } else if (feature === 'TENSORLIKE_CHECK_SHAPE_CONSISTENCY') {
       return !this.get('PROD');
+    } else if (feature === 'USE_FUSED') {
+      return false;
     }
     throw new Error(`Unknown feature ${feature}.`);
   }
