@@ -213,7 +213,8 @@ function conv2dAddActivate_<T extends Tensor3D|Tensor4D>(
     strides: [number, number]|number, pad: 'valid'|'same'|number,
     dataFormat: 'NHWC'|'NCHW' = 'NHWC',
     dilations: [number, number]|number = [1, 1], bias: Tensor|TensorLike,
-    activation: Activation, dimRoundingMode?: 'floor'|'round'|'ceil'): T {
+    activation: Activation = 'linear',
+    dimRoundingMode?: 'floor'|'round'|'ceil'): T {
   const $filter = convertToTensor(filter, 'filter', 'conv2d');
   const filterShape = $filter.shape;
   const dilationOne = (typeof dilations === 'number') ?
